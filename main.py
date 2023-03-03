@@ -1,18 +1,81 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from unet.unet_model import UNet
+
+# from unet.unet_model import UNet
+from unet.transformer import U_Transformer
 from data import trainloader, valloader
 import torch.optim as optim
 import torchvision.transforms as transforms
 import PIL
+from base import *
+from functional import *
 
-net = UNet(3, 1)
+class Activation(nn.Module):
+    def __init__(self, name, **params):
+
+        super().__init__()
+
+        if name is None or name == 'identity':
+            self.activation = nn.Identity(**params)
+        elif name == 'sigmoid':
+            self.activation = nn.Sigmoid()
+        elif name == 'softmax2d':
+            self.activation = nn.Softmax(dim=1, **params)
+        elif name == 'softmax':
+            self.activation = nn.Softmax(**params)
+        elif name == 'logsoftmax':
+            self.activation = nn.LogSoftmax(**params)
+        elif name == 'tanh':
+            self.activation = nn.Tanh()
+        # elif name == 'argmax':
+        #     self.activation = ArgMax(**params)
+        # elif name == 'argmax2d':
+        #     self.activation = ArgMax(dim=1, **params)
+        elif callable(name):
+            self.activation = name(**params)
+        else:
+            raise ValueError(
+                'Activation should be callable/sigmoid/softmax/logsoftmax/tanh/None; got {}'
+                .format(name))
+
+    def forward(self, x):
+        return self.activation(x)
+    
+
+class NoiseRobustDiceLoss(Loss):
+    def __init__(self,
+                 eps=1.,
+                 activation=None,
+                 gamma=1.5,
+                 ignore_channels=None,
+                 **kwargs):
+        super().__init__(**kwargs)
+        self.eps = eps
+        self.activation = Activation(activation)
+        self.gamma = gamma
+        self.ignore_channels = ignore_channels
+
+    def forward(self, y_pr, y_gt):
+        y_pr = self.activation(y_pr)
+        return 1 - noise_robust_dice(
+            y_pr,
+            y_gt,
+            eps=self.eps,
+            threshold=None,
+            gamma=self.gamma,
+            ignore_channels=self.ignore_channels,
+        )
+
+# net = UNet(3, 1)
+net = U_Transformer(3,1)
 net.cuda()
-criterion = nn.L1Loss()  #
-# criterion = nn.MSELoss()
+# criterion = nn.L1Loss()  #
+criterion = NoiseRobustDiceLoss(eps=1e-7, activation='sigmoid')
 optimizer = optim.AdamW(net.parameters(), lr=0.001) #
-
+# optimizer = torch.optim.Adam([
+#         dict(params=net.parameters(), lr=0.001),
+#     ])
 
 def dice_score(pred, target, smooth=1e-5):
     # binary cross entropy loss
@@ -46,12 +109,12 @@ if __name__ == '__main__':
             
             outputs_copy = outputs[0].clone()
             if epoch >= 5:
-                for row in range(128):
-                    for col in range(128):
-                        if outputs_copy[0][row][col]<0.75:
-                            outputs_copy[0][row][col]=0.
-                        else:
-                            outputs_copy[0][row][col]=1.
+                # for row in range(128):
+                #     for col in range(128):
+                #         if outputs_copy[0][row][col]<0.75:
+                #             outputs_copy[0][row][col]=0.
+                #         else:
+                #             outputs_copy[0][row][col]=1.
 
             #     tf2 = transforms.ToPILImage()
             #     ops2 = tf2(labels[0])
